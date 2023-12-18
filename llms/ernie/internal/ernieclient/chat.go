@@ -5,10 +5,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"github.com/mitchellh/mapstructure"
+	"icode.baidu.com/baidu/gdp/codec"
+	"icode.baidu.com/baidu/gdp/ghttp"
+	"icode.baidu.com/baidu/gdp/net/ral"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/tmc/langchaingo/schema"
@@ -144,50 +148,93 @@ type FunctionCall struct {
 	Arguments string `json:"arguments"`
 }
 
+type ResFailCompletion struct {
+	ErrorCode int    `mapstructure:"error_code" json:"error_code"`
+	ErrorMsg  string `mapstructure:"error_msg" json:"error_msg"`
+}
+
+type Error struct {
+	ErrMsg string
+	ErrNo  int
+}
+
+func (e *Error) Error() string {
+	return e.ErrMsg
+}
+
+func (e *Error) ErrorNo() int {
+	return e.ErrNo
+}
+
+func NewError(msg string, errno int) *Error {
+	return &Error{
+		ErrMsg: msg,
+		ErrNo:  errno,
+	}
+}
+
 func (c *Client) createChat(ctx context.Context, payload *ChatRequest) (*ChatResponse, error) {
 	if payload.StreamingFunc != nil {
 		payload.Stream = true
 	}
+
 	// Build request payload
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build request
+	// Build request body
 	body := bytes.NewReader(payloadBytes)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.buildURL(c.ModelPath), body)
-	if err != nil {
-		return nil, err
-	}
 
-	c.setHeaders(req)
+	var query url.Values
+	query.Add("access_token", c.accessToken)
 
 	// Send request
-	r, err := c.httpClient.Do(req)
+	request := &ghttp.RalRequest{
+		APIName: "ernie_chat",
+		Header: map[string][]string{
+			"Content-Type": {"application/json"},
+		},
+		Method: http.MethodPost,
+		Path:   fmt.Sprintf("/wenxinworkshop/chat/%s", c.ModelPath),
+		Query:  query,
+		Body:   body,
+	}
+
+	var raw map[string]any
+	resp := &ghttp.RalResponse{
+		Data:    &raw,
+		Decoder: codec.JSONDecoder,
+	}
+	err = ral.RAL(ctx, "wenxin_gw", request, resp)
 	if err != nil {
 		return nil, err
 	}
-	defer r.Body.Close()
 
-	if r.StatusCode != http.StatusOK {
-		msg := fmt.Sprintf("API returned unexpected status code: %d", r.StatusCode)
-
-		// No need to check the error here: if it fails, we'll just return the
-		// status code.
-		var errResp errorMessage
-		if err := json.NewDecoder(r.Body).Decode(&errResp); err != nil {
-			return nil, errors.New(msg) // nolint:goerr113
+	if _, ok := raw["error_code"]; ok {
+		var resFail ResFailCompletion
+		err = mapstructure.Decode(raw, &resFail)
+		if err != nil {
+			return nil, err
 		}
+		return nil, &Error{
+			ErrMsg: resFail.ErrorMsg,
+			ErrNo:  resFail.ErrorCode,
+		}
+	}
 
-		return nil, fmt.Errorf("%s: %s", msg, errResp.Error.Message) // nolint:goerr113
-	}
 	if payload.StreamingFunc != nil {
-		return parseStreamingChatResponse(ctx, r, payload)
+		return parseStreamingChatResponse(ctx, resp.Response(), payload)
 	}
-	// Parse response
-	var response ChatResponse
-	return &response, json.NewDecoder(r.Body).Decode(&response)
+
+	// 返回生成成功结果
+	var resSuccess ChatResponse
+	err = mapstructure.Decode(raw, &resSuccess)
+	if err != nil {
+		return nil, err
+	}
+	return &resSuccess, nil
 }
 
 func parseStreamingChatResponse(ctx context.Context, r *http.Response, payload *ChatRequest) (*ChatResponse, error) { //nolint:cyclop,lll
