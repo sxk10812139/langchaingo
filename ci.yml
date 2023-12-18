@@ -1,0 +1,23 @@
+# 百度 Go 编译环境使用指南 https://ku.baidu-int.com/d/SzGt0sD37hWmmp
+
+Global:
+    version: 2.0
+    group_email: sunxiangke@baidu.com   # <------ 配置团队邮箱地址，用于接收xx.latest软件版本升级通知邮件
+
+
+Default:
+    profile : [build]
+
+Profiles:
+    - profile:
+      name : build
+      mode: AGENT
+      environment:
+        image: DECK_STD_CENTOS7
+        tools:
+          - go: 1.21.latest
+          - gcc: 12
+      build:
+        command: sh build.sh
+      artifacts:
+        release: false

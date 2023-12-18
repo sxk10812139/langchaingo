@@ -14,3 +14,9 @@ coverage.out
 # dev
 .env
 vendor/*
+.svn
+.tmp
+.download
+output
+.*.swp
+.*.swo
