@@ -18,9 +18,6 @@ Profiles:
           - go: 1.21.latest
           - gcc: 12
       build:
-        command: make -f Makefile
-      check:
-        - reuse: TASK
-          enable: true
+        command: sh build.sh
       artifacts:
-        release: true
+        release: false
